@@ -3,10 +3,14 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 const BASE_URL = 'https://prehrajto.cz';
+// "Vizitka" našeho doplňku, která se tváří jako prohlížeč
+const BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+};
 
 const manifest = {
     id: 'com.community.prehrajto-cz',
-    version: '1.0.8', // Finální verze s opravou relativních URL
+    version: '1.0.9', // Finální verze s maskováním
     name: 'Přehraj.to',
     description: 'Poskytuje streamy a vyhledávání z webu přehrajto.cz. Inspirováno Kodi doplňkem od Saros72.',
     resources: ['stream', 'catalog'],
@@ -30,6 +34,7 @@ builder.defineStreamHandler(async (args) => {
     console.log(`Požadavek na stream pro: ${args.type} ${args.id}`);
 
     try {
+        // Tento dotaz jde na API, nepotřebuje maskování
         const metaResponse = await axios.get(`https://v3-cinemeta.strem.io/meta/${args.type}/${args.id}.json`);
         const movieName = metaResponse.data.meta.name;
         console.log(`Podle ID zjištěn název filmu: "${movieName}"`);
@@ -37,7 +42,8 @@ builder.defineStreamHandler(async (args) => {
         const searchUrl = `${BASE_URL}/hledej/${encodeURIComponent(movieName)}`;
         console.log(`Hledám na: ${searchUrl}`);
 
-        const searchResponse = await axios.get(searchUrl);
+        // Přidáváme hlavičky, aby nás web pustil dál
+        const searchResponse = await axios.get(searchUrl, { headers: BROWSER_HEADERS });
         const $search = cheerio.load(searchResponse.data);
 
         let moviePageUrl;
@@ -54,14 +60,14 @@ builder.defineStreamHandler(async (args) => {
             return { streams: [] };
         }
         
-        // ZDE JE FINÁLNÍ OPRAVA: Zkontrolujeme, jestli URL není relativní
         if (moviePageUrl && !moviePageUrl.startsWith('http')) {
             moviePageUrl = BASE_URL + moviePageUrl;
         }
 
         console.log(`Nalezen odkaz na film (plná URL): ${moviePageUrl}`);
 
-        const moviePageResponse = await axios.get(moviePageUrl);
+        // Přidáváme hlavičky i sem
+        const moviePageResponse = await axios.get(moviePageUrl, { headers: BROWSER_HEADERS });
         const pageHtml = moviePageResponse.data;
         const match = pageHtml.match(/file:\s*"([^"]+)"/);
 
@@ -70,12 +76,9 @@ builder.defineStreamHandler(async (args) => {
             console.log(`Nalezen přímý stream: ${videoUrl}`);
             const stream = {
                 url: videoUrl,
-                title: `Přehraj.to - Finální verze`,
+                title: `Přehraj.to - Hotovo!`,
                 behaviorHints: {
-                    proxyHeaders: {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                        "Referer": moviePageUrl
-                    }
+                    proxyHeaders: { "User-Agent": BROWSER_HEADERS["User-Agent"], "Referer": moviePageUrl }
                 }
             };
             return { streams: [stream] };
@@ -99,30 +102,23 @@ builder.defineCatalogHandler(async (args) => {
     const searchUrl = `${BASE_URL}/hledej/${encodeURIComponent(searchQuery)}`;
 
     try {
-        const response = await axios.get(searchUrl);
+        // Přidáváme hlavičky i sem
+        const response = await axios.get(searchUrl, { headers: BROWSER_HEADERS });
         const $ = cheerio.load(response.data);
 
         const metas = [];
         $('div.video__picture--container').each((index, element) => {
             const linkElement = $(element).find('a.video--link');
             const imgElement = $(element).find('img.thumb1');
-
             const title = linkElement.attr('title'); 
             const href = linkElement.attr('href');
             let poster = imgElement.attr('src');
-
             if (poster && !poster.startsWith('http')) poster = BASE_URL + poster;
-
             if (title && href) {
                 const filmIdMatch = href.match(/-(tt\d+)/);
                 const id = filmIdMatch ? filmIdMatch[1] : `ph:${title.replace(/\s/g, '_')}`;
-
                 metas.push({
-                    id: id,
-                    type: 'movie',
-                    name: title,
-                    poster: poster,
-                    posterShape: 'poster'
+                    id: id, type: 'movie', name: title, poster: poster, posterShape: 'poster'
                 });
             }
         });
